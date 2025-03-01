@@ -5,7 +5,6 @@
 - C++17 or later
 - CMake 3.10 or later
 - Linux environment (tested on Ubuntu 22.04)
-- pthread library
 
 ## Building the Project
 

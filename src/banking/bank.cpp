@@ -2,22 +2,42 @@
 #include <thread>
 #include <random>
 #include <iostream>
+#include <sstream>
+#include <iomanip>
+#include <chrono>
+#include <cstdio>
 
 Bank::Bank(size_t num_accounts, double initial_balance) {
     for (size_t i = 0; i < num_accounts; ++i) {
         accounts_.push_back(std::make_unique<Account>(i, initial_balance));
     }
+    
+    // Open pipe to logger process
+    #ifdef _WIN32
+        loggerPipe = _popen("transaction_logger.exe", "w");
+    #else
+        loggerPipe = popen("./transaction_logger", "w");
+    #endif
+    
+    if (!loggerPipe) {
+        std::cerr << "Failed to open pipe to logger. Make sure transaction_logger is built and in the current directory." << std::endl;
+    }
 }
 
-void Bank::simulateTransactions(size_t num_threads) {
-    std::vector<std::thread> threads;
-    
-    for (size_t i = 0; i < num_threads; ++i) {
-        threads.emplace_back(&Bank::performRandomTransactions, this, i);
+Bank::~Bank() {
+    if (loggerPipe) {
+        #ifdef _WIN32
+            _pclose(loggerPipe);
+        #else
+            pclose(loggerPipe);
+        #endif
     }
-    
-    for (auto& thread : threads) {
-        thread.join();
+}
+
+void Bank::logTransaction(const std::string& message) {
+    if (loggerPipe) {
+        fprintf(loggerPipe, "%s\n", message.c_str());
+        fflush(loggerPipe);
     }
 }
 
@@ -34,22 +54,21 @@ void Bank::performRandomTransactions(int thread_id) {
         if (from_acc != to_acc) {
             double amount = amount_dist(gen);
             bool success = false;
-
-            // Try transfer with timeout first
+            
+            // Try transfer with timeout
             success = accounts_[from_acc]->transferWithTimeout(*accounts_[to_acc], amount, thread_id);
             
-            if (!success) {
-                // If timeout-based transfer fails, try ordered transfer
-                success = accounts_[from_acc]->transferWithOrdering(*accounts_[to_acc], amount, thread_id);
-                
-                std::lock_guard<std::mutex> lock(cout_mutex);
-                std::cout << "Thread " << thread_id 
-                          << " failed timeout transfer, using ordered transfer for $" 
-                          << amount << " from account " << from_acc 
-                          << " to account " << to_acc 
-                          << " - Status: " << (success ? "Success" : "Failed") 
-                          << std::endl;
-            }
+            std::stringstream log_message;
+            log_message << "Thread " << thread_id 
+                       << " transferred $" << std::fixed << std::setprecision(2) << amount 
+                       << " from Account " << from_acc 
+                       << " to Account " << to_acc 
+                       << " - Status: " << (success ? "Success" : "Failed");
+            
+            logTransaction(log_message.str());
+            
+            // Small delay between transactions
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
 }
@@ -57,6 +76,19 @@ void Bank::performRandomTransactions(int thread_id) {
 void Bank::printAccountBalances() const {
     for (const auto& account : accounts_) {
         std::cout << "Account " << account->getId() 
-                  << ": $" << account->getBalance() << std::endl;
+                  << ": $" << std::fixed << std::setprecision(2) 
+                  << account->getBalance() << std::endl;
+    }
+}
+
+void Bank::simulateTransactions(size_t num_threads) {
+    std::vector<std::thread> threads;
+    
+    for (size_t i = 0; i < num_threads; ++i) {
+        threads.push_back(std::thread(&Bank::performRandomTransactions, this, i));
+    }
+    
+    for (auto& thread : threads) {
+        thread.join();
     }
 }
